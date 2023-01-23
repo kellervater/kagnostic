@@ -1,0 +1,33 @@
+all:
+    vars:
+        rke_version: v1.3.12 
+        netclient_version: 0.17.1
+        cluster_name: example-cluster
+    hosts:
+      netmaker:
+        # computing instance for Netmaker - GCP VM - europe-west3-a - e2-micro - 10 GB boot disc (standard)
+        # it needs following firewall config: 
+        # TCP/443 - your company/personal ip - would recommend not to open to the world because Netmaker will control the inner workings of your cluster. So it can be considered a highly vulnerable components regarding security. 
+        # TCP/22 - your company/personal ip - same as above but for ssh 
+        # UDP/51821 - for everyone (0.0.0.0/0) - TODO maybe a tighter policy can be made here... like only allowing external client ips and node ips... if you want more than one network, you need to open more ports (https://docs.netmaker.org/quick-start.html#prerequisites)
+        ansible_host: 34.141.32.232 # this is an ec2 instance atm - make sure this is a static ip, to not loose DNS entry validity
+        ansible_user: johndoe # the ssh user to access this computing instance... make sure your public ssh key is stored in authorized_keys on the instance 
+        netmaker_version: v0.17.1 # for stability we do NOT rely on any latest versions. 
+        base_domain: kagnostic.example.com # will be used in the docker-compose template
+        letsencrypt_email: johndoe@example.com
+        network: 
+          id: exampleNetwork
+          address_range: 10.10.10.0/24 # I guess this can be any private ip range you like (https://whatismyipaddress.com/private-ip#private-ip), whereas I assume only the last segment is usable without any setup complications
+        access_key:
+          name: exampleAccessKey
+          uses: 200
+        # SECRETS
+        # For the sake of simplicity we don't care about security in this one.
+        # BUT: I highly recommend to NOT store them plaintext in the inventory. Either inject them during runtime or store them encrypted in a separate file. We can go into that on demand ;-)
+        # In our production environment we have an encrypted file called `secret.sops.yaml` which contains all keys encrypted and decrypts them on runtime using SOPS ()
+        credentials: #please don't be creative yourself with credentials! Just let a randomizer create your secrets
+          master_key: randomMasterKey
+          ui_admin_user: admin
+          ui_admin_pass: adminPW
+          mq_admin_password: mqAdminPW
+   

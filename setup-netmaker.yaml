@@ -1,0 +1,73 @@
+---
+- hosts: netmaker
+#   pre_tasks:
+#     - name: update dependencies safely
+#       apt:
+#         upgrade: safe
+#         update_cache: yes
+#       become: yes
+  tasks:
+    - name: Install packages
+      apt: 
+        pkg:
+          - docker.io
+          - docker-compose
+          - wireguard
+      register: packages
+      become: yes
+    - name: Configure Netmaker
+      ansible.builtin.template:
+        src: "netmaker/{{ item }}.j2"
+        dest: "/root/{{ item }}"
+      become: yes
+      loop:
+        - Caddyfile
+        - docker-compose.yml
+        - mosquitto.conf
+        - wait.sh
+    - name: Restart Netmaker
+      ansible.builtin.shell: |
+        pwd
+        cd /root
+        chmod +x wait.sh
+        docker-compose up -d --remove-orphans
+      become: yes
+    - name: Pause play until a URL is reachable from this host
+      uri:
+        url: "https://dashboard.{{ base_domain }}"
+        follow_redirects: none
+        method: GET
+        status_code:
+          - 200
+          - 403
+      register: _result
+      until: _result.status == 200 or _result.status == 403
+      retries: 120 
+      delay: 5 # Every 5 seconds
+    - name: Has Admin?
+      uri:
+        url: "https://api.{{ base_domain }}/api/users/adm/hasadmin"
+        headers:
+          Content-Type: application/json
+          Authorization: "Bearer {{ credentials.master_key }}"
+        method: GET
+      delegate_to: localhost
+      register: hasAdmin
+    - name: Create Admin
+      uri:
+        url: "https://api.{{ base_domain }}/api/users/adm/createadmin"
+        headers:
+          Content-Type: application/json
+          Authorization: "Bearer {{ credentials.master_key }}"
+        method: POST
+        body_format: json
+        body: |
+          {
+            "username": "{{ credentials.ui_admin_user }}", 
+            "password": "{{ credentials.ui_admin_pass }}"
+          }
+      delegate_to: localhost
+      register: _result
+      changed_when: _result.status == 200
+      when: hasAdmin.json|bool == false
+    
