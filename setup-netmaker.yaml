@@ -1,11 +1,12 @@
 ---
 - hosts: netmaker
-#   pre_tasks:
-#     - name: update dependencies safely
-#       apt:
-#         upgrade: safe
-#         update_cache: yes
-#       become: yes
+  pre_tasks:
+    # don't use debian... man page DB updates take ages on smaller instances
+    - name: update dependencies safely. 
+      apt:
+        upgrade: safe
+        update_cache: yes
+      become: yes
   tasks:
     - name: Install packages
       apt: 
@@ -32,7 +33,7 @@
         chmod +x wait.sh
         docker-compose up -d --remove-orphans
       become: yes
-    - name: Pause play until a URL is reachable from this host
+    - name: Pause play until https://dashboard.{{ base_domain }} is reachable from this host
       uri:
         url: "https://dashboard.{{ base_domain }}"
         follow_redirects: none

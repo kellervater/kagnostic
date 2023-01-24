@@ -1,0 +1,129 @@
+---
+    
+- hosts: netmaker
+  tasks:
+    - name: Has Network {{ network.id }} 
+      uri:
+        url: "https://api.{{ base_domain }}/api/networks/{{ network.id }}"
+        headers:
+          Content-Type: application/json
+          Authorization: "Bearer {{ credentials.master_key }}"
+        method: GET
+        status_code:
+          - 200
+          - 500
+      delegate_to: localhost
+      register: hasNetwork
+    - name: Create Network
+      uri:
+        url: "https://api.{{ base_domain }}/api/networks"
+        headers:
+          Content-Type: application/json
+          Authorization: "Bearer {{ credentials.master_key }}"
+        method: POST
+        body_format: json
+        body: | 
+          {
+              "addressrange": "{{ network.address_range }}",
+              "netid": "{{ network.id }}",
+              "defaultudpholepunch": "yes",
+              "defaultmtu": 1280,
+          }
+        status_code:
+          - 200
+      delegate_to: localhost
+      register: _result
+      changed_when: _result.status == 200
+      when: hasNetwork.status == 500
+    - name: create new access key
+      uri:
+        url: "https://api.{{ base_domain }}/api/networks/{{ network.id }}/keys"
+        headers:
+          Content-Type: application/json
+          Authorization: "Bearer {{ credentials.master_key }}"
+        method: POST
+        body_format: json
+        body: |
+          {
+              "uses": {{ access_key.uses }},
+              "name": "{{ access_key.name }}",
+          }
+        status_code:
+          - 200
+          - 400 # comes back if it does already exist
+      delegate_to: localhost
+      register: access_key
+      failed_when: "access_key.status != 200 and 'duplicate AccessKey Name' not in access_key.json.Message"
+    - name: get access key
+      uri:
+        url: "https://api.{{ base_domain }}/api/networks/{{ network.id }}/keys"
+        headers:
+          Content-Type: application/json
+          Authorization: "Bearer {{ credentials.master_key }}"
+        method: GET
+        status_code:
+          - 200
+      delegate_to: localhost
+      register: access_key  
+    - name: set access_token as fact
+      set_fact:
+        network_access_token: "{{ access_key.json.0.accessstring }}"
+    
+
+# join network with specific static address to create reliably upgradable infrastructure
+- hosts: nodes:rancher
+  any_errors_fatal: true
+  pre_tasks:
+    - name: Netclient prerequisites
+      shell: |
+        curl -sL 'https://apt.netmaker.org/gpg.key' | tee /etc/apt/trusted.gpg.d/netclient.asc
+        curl -sL 'https://apt.netmaker.org/debian.deb.txt' | tee /etc/apt/sources.list.d/netclient.list
+      become: yes 
+    - name: Install packages
+      ansible.builtin.apt:
+        pkg:
+          - netclient={{ netclient_version }}
+        update_cache: yes
+      become: yes
+  tasks:
+    - name: Join Network
+      shell: |
+        netclient join -t {{ hostvars['netmaker']['network_access_token'] }} {% if netmaker_ip|length > 0 %}--address {{ netmaker_ip }}{% endif %}
+      register: join_result
+      changed_when: "'ALREADY_INSTALLED' not in join_result.stdout"
+      become: yes
+    - name: Get all Nodes
+      uri:
+        url: "https://api.{{ hostvars['netmaker']['base_domain'] }}/api/nodes/{{ hostvars['netmaker']['network']['id'] }}"
+        headers:
+          Content-Type: application/json
+          Authorization: "Bearer {{ hostvars['netmaker']['credentials']['master_key'] }}"
+        method: GET
+      delegate_to: localhost
+      register: nodes
+    - name: Extract node and change isstatic value
+      set_fact:
+        node: "{{ nodes.json|selectattr('name','equalto',inventory_hostname) | first | combine({'isstatic': 'yes'}, recursive=True) }}"
+    - name: Make nodes static
+      uri:
+        url: "https://api.{{ hostvars['netmaker']['base_domain'] }}/api/nodes/{{ hostvars['netmaker']['network']['id'] }}/{{ id }}"
+        headers:
+          Content-Type: application/json
+          Authorization: "Bearer {{ hostvars['netmaker']['credentials']['master_key'] }}"
+        method: PUT
+        body_format: json
+        body: "{{ node }}" # yaml is automatically converted to json here
+      vars:
+        id: "{{ nodes.json|selectattr('name','equalto',inventory_hostname)|map(attribute='id') | first }}"
+    - name: Pull latest config
+      shell: |
+        netclient pull -n {{ hostvars['netmaker']['network']['id'] }}
+      become: yes
+    - name: ping all peers (including self)
+      shell: |
+        ping "{{ item }}" -c 1
+      register: result
+      retries: 5
+      delay: 5
+      until: result.rc == 0
+      loop: "{{ nodes.json|map(attribute='address') }}"

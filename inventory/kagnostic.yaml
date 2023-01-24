@@ -1,23 +1,20 @@
 all:
     vars:
-        rke_version: v1.3.12 
-        netclient_version: 0.17.1
-        cluster_name: example-cluster
+        rke_version: v1.4.2 
+        netclient_version: 0.17.1-0
+        cluster_name: kagnostic-cluster
     hosts:
       netmaker:
-        # computing instance for Netmaker - GCP VM - europe-west3-a - e2-micro - 10 GB boot disc (standard)
-        # it needs following firewall config: 
-        # TCP/443 - your company/personal ip - would recommend not to open to the world because Netmaker will control the inner workings of your cluster. So it can be considered a highly vulnerable components regarding security. 
-        # TCP/22 - your company/personal ip - same as above but for ssh 
-        # UDP/51821 - for everyone (0.0.0.0/0) - TODO maybe a tighter policy can be made here... like only allowing external client ips and node ips... if you want more than one network, you need to open more ports (https://docs.netmaker.org/quick-start.html#prerequisites)
+        # computing instance for Netmaker - GCP VM - europe-west3-a - e2-micro - 10 GB boot disc (standard) - Ubuntu
+        # it needs following firewall config like described in README.md 
         ansible_host: 34.141.32.232 # this is an ec2 instance atm - make sure this is a static ip, to not loose DNS entry validity
-        ansible_user: johndoe # the ssh user to access this computing instance... make sure your public ssh key is stored in authorized_keys on the instance 
+        ansible_user: cortana # the ssh user to access this computing instance... make sure your public ssh key is stored in authorized_keys on the instance 
         netmaker_version: v0.17.1 # for stability we do NOT rely on any latest versions. 
-        base_domain: kagnostic.example.com # will be used in the docker-compose template
-        letsencrypt_email: johndoe@example.com
+        base_domain: k8s.voo.aero # will be used in the docker-compose template
+        letsencrypt_email: cortana@voo.aero
         network: 
-          id: exampleNetwork
-          address_range: 10.10.10.0/24 # I guess this can be any private ip range you like (https://whatismyipaddress.com/private-ip#private-ip), whereas I assume only the last segment is usable without any setup complications
+          id: kagnostic # TODO shouldn't be too long, otherwise api call fails badly ;-) 
+          address_range: 10.11.12.0/24 # I guess this can be any private ip range you like (https://whatismyipaddress.com/private-ip#private-ip), whereas I assume only the last segment is usable without any setup complications
         access_key:
           name: exampleAccessKey
           uses: 200
@@ -25,9 +22,92 @@ all:
         # For the sake of simplicity we don't care about security in this one.
         # BUT: I highly recommend to NOT store them plaintext in the inventory. Either inject them during runtime or store them encrypted in a separate file. We can go into that on demand ;-)
         # In our production environment we have an encrypted file called `secret.sops.yaml` which contains all keys encrypted and decrypts them on runtime using SOPS ()
-        credentials: #please don't be creative yourself with credentials! Just let a randomizer create your secrets
+        credentials: #please don't be "creative" with credentials! Just let a randomizer create your secrets
           master_key: randomMasterKey
           ui_admin_user: admin
           ui_admin_pass: adminPW
           mq_admin_password: mqAdminPW
-   
+      rke:
+        # computing instance to run rancher kubernetes engine... 
+        # GCP VM - europe-west3-c - e2-micro - 10 GB boot disc (standard)
+        # no sepcial firewall rules on this one... just keep 22 open for your ansible business..
+        # if you want to run a rancher thingy you'll have to open 443/80 as well to access webUI (I personally don't run it atm)
+        # TODO: I guess it's also ok to run this locally as well. 
+        #       So if you're using localhost it should also work, as long as we integrate localhost in networking infrastructure.. 
+        #       this would have to done as external client, since localhost is not always online reliably
+        ansible_host: 34.159.50.95  
+        ansible_user: cortana
+        netmaker_ip: 10.11.12.253
+      node1: 
+        # computing instance for k8s node
+        # GCP VM - europe-west3-b - e2-medium (2vcpu, 4gb mem) - Standard GCP Linux OS
+        # see README.md for firewall settings
+        ansible_host: 34.107.25.224 
+        ansible_user: cortana
+        netmaker_ip: 10.11.12.1 
+        k8s:
+          roles:
+            - controlplane
+            - etcd
+            - worker
+          labels: # Kubernetes Labels for this node. They can be used for NodeSelectors later on These are just some examples...
+            - key: topology.kubernetes.io/region
+              value: frankfurt
+            - key: topology.kubernetes.io/zone
+              value: b
+            - key: node.cloudprovider.kubernetes.io/name
+              value: gcp
+      node2:
+        # computing instance for k8s node
+        # AWS EC2 instance - eu-central-1b - t2.medium (2vcpu, 4gb mem) - Ubuntu 22.04
+        # see README.md for firewall settings
+        # ATTENTION for EC2: make sure your hostname matches the hostname of the ansible file!
+        ansible_host: 18.159.11.66
+        ansible_user: ubuntu
+        netmaker_ip: 10.11.12.2 
+        k8s:
+          roles:
+            - controlplane
+            - etcd
+            - worker
+          labels:
+            - key: topology.kubernetes.io/region
+              value: frankfurt
+            - key: topology.kubernetes.io/zone
+              value: a1
+            - key: node.cloudprovider.kubernetes.io/name
+              value: aws
+      node3:
+        # computing instance for k8s node
+        # Azure VM - West Europe - B2s (2vcpu, 4gb mem) - Ubuntu 22.04 - x64 arch
+        # azure doesn't support ed25519 public ssh keys... only rsa... need to create one for ansible install at least
+        # see README.md for firewall settings
+        ansible_host: 13.93.44.96
+        ansible_user: cortana
+        netmaker_ip: 10.11.12.3 
+        k8s:
+          roles:
+            - controlplane
+            - etcd
+            - worker
+          labels:
+            - key: topology.kubernetes.io/region
+              value: westeurope
+            - key: topology.kubernetes.io/zone
+              value: netherlands
+    # ansible group section... 
+    # it packs hosts defined above into logical groups so they can be used in playbooks
+    children: # this creates logical groups, which we can/must be used in ansible playbooks
+      onprem: # there's no bare metal on prem node here, so no hosts in this group
+      cloud:
+        hosts:
+          node1: # gcp
+          node2: # aws
+          node3: # azure
+      nodes:
+        children: # required if you want to make a group containing subgroups
+          onprem:
+          cloud:
+      rancher:
+        hosts:
+          rke:
