@@ -1,1 +1,1 @@
-ANSIBLE_CONFIG=$(dirname "$0")/ansible.cfg ansible-playbook setup-networking.yaml -i inventory/kagnostic.yaml $1
+ANSIBLE_CONFIG=$(dirname "$0")/ansible.cfg ansible-playbook playbooks/setup-networking.yaml -i inventory/kagnostic.yaml $1

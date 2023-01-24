@@ -1,0 +1,72 @@
+cluster_name: {{ cluster_name }}
+nodes:
+{% for node in groups['nodes'] %}
+  - address: {{ hostvars[node]['netmaker_ip_address'] }} 
+    internal_address: {{ hostvars[node]['netmaker_ip_address'] }}
+    hostname_override: {{ node }}.k8s
+    user: {{ hostvars[node]['ansible_user'] }}
+    role:
+{% for role in hostvars[node]['k8s']['roles'] %}
+      - {{ role }}
+{% endfor %}{% if hostvars[node]['k8s']['labels'] is defined %}
+    labels: 
+{% for label in hostvars[node]['k8s']['labels'] %}
+      {{ label.key }}: {{ label.value }}
+{% endfor %}{% endif %}
+{% if hostvars[node]['k8s']['taints'] is defined %}
+    taints: 
+{% for taint in hostvars[node]['k8s']['taints'] %}
+      - key: {{ taint.key }}
+        value: {{ taint.value }}
+        effect: {{ taint.effect }}
+{% endfor %}{% endif %}
+{% endfor %}
+
+dns:
+  provider: coredns
+
+etcd:
+  backup_config:
+    interval_hours: 24
+    retention: 7
+
+# kube-controller:
+#  extra_args:
+#    node-monitor-grace-period: 16s # node marked as unhealthy after 16s unreachability
+#    node-monitor-period: 4s # timeframe in which controller checks all kubelets
+   # pod-eviction-timeout: 300s # after marked unhealthy, node has got 180s to respawn before pods get evicted
+
+network:
+  plugin: flannel
+  options:
+    flannel_iface: nm-{{ hostvars['netmaker']['network']['id'] }}
+
+authorization:
+  mode: rbac
+
+services:
+  kubelet:
+    # extra_args:
+      # node-status-update-frequency: 4s
+    extra_binds:
+      - "/lib/modules" #openebs
+      - "/var/openebs/local:/var/openebs/local" #mount the OpenEBS Local PV hostpath default directory on to the kubelet container
+      - "/mnt/general:/mnt/general" # general disk partition
+      - "/mnt/database:/mnt/database" # disk partition dedicated for postgresql, neo4j and mongo
+  etcd:
+    snapshot: true
+    creation: 6h
+    retention: 24h
+  kube-controller:
+    extra_args:
+      # this is some serious stackgres stuff
+      cluster-signing-cert-file: /etc/kubernetes/ssl/kube-ca.pem
+      cluster-signing-key-file: /etc/kubernetes/ssl/kube-ca-key.pem
+
+# Required for external TLS termination with
+# ingress-nginx v0.22+
+ingress:
+  provider: nginx
+  options:
+    use-forwarded-headers: "true"
+    
