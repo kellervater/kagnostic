@@ -1,1 +1,3 @@
 *.retry
+# .kubeconfig because it grants master access to the entire k8s cluster
+*.kubeconfig

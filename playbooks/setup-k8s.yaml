@@ -1,0 +1,107 @@
+---
+
+  # the rke instance needs ssh access to all nodes, so we create a ssh key and propagate it as authorized_key on all nodes  
+- hosts: rancher
+  any_errors_fatal: true
+  pre_tasks:
+    - name: update dependencies
+      apt:
+        upgrade: safe
+        update_cache: yes
+      become: yes
+  tasks:
+    - name: Generate an OpenSSH keypair with the default values (ed25519)
+      community.crypto.openssh_keypair:
+        path: ~/.ssh/id_rsa
+        comment: "Rancher"
+        type: ed25519
+      register: ssh_result
+    - name: save public key
+      set_fact:
+        rancher_public_ssh_key: "{{ ssh_result.public_key }}"
+    - name: install kubectl
+      include_role: 
+        name: andrewrothstein.kubectl
+
+- hosts: nodes
+  any_errors_fatal: true
+  tasks: 
+    - name: Add rancher key to authorized rke keys
+      ansible.posix.authorized_key:
+        user: "{{ ansible_user }}"
+        state: present
+        key: "{{ hostvars['rke']['rancher_public_ssh_key'] }}"
+    - name: Get netmaker ip addresses via Netmaker API 
+      uri:
+        url: "https://api.{{ hostvars['netmaker']['base_domain'] }}/api/nodes/{{ hostvars['netmaker']['network']['id'] }}"
+        headers:
+          Content-Type: application/json
+          Authorization: "Bearer {{ hostvars['netmaker']['credentials']['master_key'] }}"
+        method: GET
+      delegate_to: localhost
+      register: nodes
+      # this appends `netmaker_ip_address` as a hostvar to each host so it knows its private address
+    - name: assign netmaker ip address as fact 
+      set_fact:
+        netmaker_ip_address: "{{ nodes.json|selectattr('name','equalto',inventory_hostname)|map(attribute='address') | first}}"
+
+- hosts: nodes
+  become: yes
+  tasks:
+    - name: update dependencies safely. 
+      apt:
+        upgrade: safe
+        update_cache: yes
+      become: yes
+    # fixme: this one's a bit buggy (it always adds the lines instead of updating existing ones), but doesn't harm functionality atm
+    - name: Update the /etc/hosts file with node name
+      become: yes
+      lineinfile:
+        path: "/etc/hosts"
+        regexp: ".*\t{{ hostvars[item]['inventory_hostname']}}.k8s"
+        line: "{{ hostvars[item]['netmaker_ip'] }}\t{{ hostvars[item]['inventory_hostname']}}.k8s"
+        state: present
+        backup: yes
+      with_items: "{{groups['nodes']}}"
+    - include_role:
+        name: geerlingguy.docker
+      vars:
+        docker_apt_release_channel: stable
+        docker_install_compose: no
+        docker_service_state: started
+        docker_service_enabled: yes
+        docker_restart_handler_state: restarted
+        docker_users:
+          - "{{ ansible_user }}"
+      
+    
+- hosts: rancher
+  gather_facts: no
+  any_errors_fatal: yes
+  tasks:
+    - name: "transfer cluster config to rancher vm"
+      ansible.builtin.template:
+        src: "rke/cluster.yml.j2"
+        dest: "~/cluster.yml"
+        mode: 0755
+      register: config
+    - name: "Download rke"
+      uri:
+        url: "https://github.com/rancher/rke/releases/download/{{ rke_version|default('latest') }}/rke_linux-amd64"
+        dest: ~/rke
+        mode: 0755
+        status_code:
+          - 200
+          - 304 
+      retries: 12
+      delay: 5
+    - name: "Start/update rke (this may take some minutes)"
+      ansible.builtin.shell: |
+        ./rke up
+      register: rke_output
+      changed_when: "'Finished building Kubernetes cluster successfully' in rke_output.stdout"
+    - name: "Download kubeconfig"
+      ansible.builtin.fetch:
+        src: ~/kube_config_cluster.yml
+        dest: ../{{cluster_name}}.kubeconfig
+        flat: yes
